@@ -46,18 +46,14 @@ export class ScrapingService {
               },
             );
           });
-          console.log('.5');
 
           // Guardar los datos en la base de datos
           for (let i = 1; i < rows.length; i++) {
             console.log(rows[i]);
-            console.log('1');
             const row = rows[i];
             if (row.length > 1) {
-              console.log('2');
               const numRegistro = parseInt(row[1], 10);
               if (!isNaN(numRegistro)) {
-                console.log('3');
                 const scrapingEntity = new ScrapingEntity();
                 scrapingEntity.razonSocial = row[0]; // Asignar el valor correspondiente
                 scrapingEntity.numRegistro = numRegistro; // Asignar el valor correspondiente
@@ -81,30 +77,3 @@ export class ScrapingService {
     await browser.close();
   }
 }
-
-//          const data = await page.evaluate(() => {
-//             return document.querySelector("#resultData").textContent;
-
-/*
-tables: Array.from(document.querySelectorAll('table')).map((table, index) => {
-                    const rows = Array.from(table.querySelectorAll('tr')).map(row => {
-                        return Array.from(row.querySelectorAll('th, td')).map(cell => cell.textContent?.trim() || '');
-                    });
-                    // Filter out tables with rows of length 2
-                    if (rows.length > 1 && rows[0].length > 1 && !rows.some(row => row.length === 2)) {
-                        return {
-                            name: `${title}_${index + 1}`,
-                            rows: rows
-                        };
-                    }
-                    return null;
-                }).filter(table => table !== null)
-* */
-/*
-for (const row of rows) {
-            const scrapingEntity = new ScrapingEntity();
-            scrapingEntity.razonSocial = row[0]; // Asignar el valor correspondiente
-            scrapingEntity.numRegistro = parseInt(row[1], 10); // Asignar el valor correspondiente
-            await this.scrapingRepository.save(scrapingEntity);
-          }
- */
