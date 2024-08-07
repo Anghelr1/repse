@@ -12,67 +12,104 @@ export class ScrapingService {
   ) {}
 
   async scrapeData(url: string): Promise<any> {
-    const browser = await puppeteer.launch({ headless: false });
+    const browser = await puppeteer.launch({ headless: false }); // Set headless to false for debugging
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: 'networkidle2' });
 
-    // Hacer clic en los botones específicos
+    // Click on specific buttons
     await page.click('#arrowdiv-consulta');
-    await page.waitForSelector('.btn-primary-right ');
-    await page.click('.btn-primary-right ');
+    await page.waitForSelector('.btn-primary-right');
+    await page.evaluate(() => {
+      const button = document.querySelector('.btn-primary-right');
+      if (button) {
+        button.scrollIntoView();
+      }
+    });
+    try {
+      await page.click('.btn-primary-right');
+    } catch (error) {
+      console.error(`Error clicking .btn-primary-right: ${error.message}`);
+      await browser.close();
+      return;
+    }
 
-    // Esperar a que la página se redireccione
+    // Wait for the page to redirect
     await page.waitForSelector('#rsoc');
     console.log('Página redireccionada');
 
-    let letters = ['a', 'b',"c", "d", "e", "f", "g", "h", "i", "j",
-      "k", "l", "m", "n", "ñ", "o", "p", "q", "r", "s", "t",
-      "u", "v", "w", "x", "y", "z"];
+    const letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j',
+      'k', 'l', 'm', 'n', 'ñ', 'o', 'p', 'q', 'r', 's', 't',
+      'u', 'v', 'w', 'x', 'y', 'z'];
     for (let i = 0; i < letters.length; i++) {
       for (let j = 0; j < letters.length; j++) {
         for (let k = 0; k < letters.length; k++) {
-          await page.type('#rsoc', `${letters[i]}${letters[j]}${letters[k]}`);
-          await page.click('#bnt_busqueda');
-          await page.waitForSelector('#tablaem');
-          await page.waitForSelector('th'); // Esperar a que aparezca la etiqueta td
-          console.log(`${letters[i]}${letters[j]}${letters[k]}`);
-          await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 2000))); // Esperar 2 segundos
+          let searchString = `${letters[i]}${letters[j]}${letters[k]}`;
+          let retry = true;
 
-          // Obtener los datos arrojados
-          const rows = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll('#tablaem tr')).map(
-              (row) => {
-                return Array.from(row.querySelectorAll('th, td')).map(
-                  (cell) => cell.textContent?.trim() || '',
-                );
-              },
-            );
-          });
+          while (retry) {
+            await page.type('#rsoc', searchString);
+            await new Promise(resolve => setTimeout(resolve, 4000));
 
-          // Guardar los datos en la base de datos
-          for (let i = 1; i < rows.length; i++) {
-            console.log(rows[i]);
-            const row = rows[i];
-            if (row.length > 1) {
-              const numRegistro = parseInt(row[1], 10);
-              if (!isNaN(numRegistro)) {
+            // Disable reCAPTCHA
+            await page.evaluate(() => {
+              const recaptcha = document.querySelector('.grecaptcha-badge') as HTMLElement;
+              if (recaptcha) {
+                recaptcha.style.display = 'none';
+              }
+              const tokenInput = document.querySelector('#g-recaptcha-response') as HTMLInputElement;
+              if (tokenInput) {
+                tokenInput.value = 'dummy-token';
+              }
+            });
+
+            await page.click('#bnt_busqueda');
+            await page.waitForSelector('#tablaem');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log(`Searching for: ${searchString}`);
+
+            // Check for reCAPTCHA validation error
+            const captchaError = await page.evaluate(() => {
+              const errorElement = document.querySelector('#tablaem tbody h4');
+              return errorElement ? errorElement.textContent.includes('Validación de capcha incorrecta.') : false;
+            });
+
+            if (captchaError) {
+              console.log('Captcha validation failed, refreshing page...');
+              await page.reload({ waitUntil: 'networkidle2' });
+              await page.waitForSelector('#rsoc');
+              continue; // Retry the same search string
+            }
+
+            retry = false; // Exit the retry loop if no captcha error
+
+            await page.waitForSelector('#tablaem tr');
+            // Extract data from the table
+            const rows = await page.evaluate(() => {
+              return Array.from(document.querySelectorAll('#tablaem tr')).map(row => {
+                return Array.from(row.querySelectorAll('th, td')).map(cell => cell.textContent?.trim() || '');
+              });
+            });
+
+            // Skip the header row and save data to the database
+            for (let i = 1; i < rows.length; i++) {
+              const row = rows[i];
+              if (row.length > 1) {
                 const scrapingEntity = new ScrapingEntity();
-                scrapingEntity.razonSocial = row[0]; // Asignar el valor correspondiente
-                scrapingEntity.numRegistro = numRegistro; // Asignar el valor correspondiente
-                console.log(
-                  `Guardando: ${scrapingEntity.razonSocial}, ${scrapingEntity.numRegistro}`,
-                );
-                await this.scrapingRepository.save(scrapingEntity);
-              } else {
-                console.warn(`Número de registro no válido: ${row[1]}`);
+                scrapingEntity.razonSocial = row[0]; // Assign the corresponding value
+                // Ensure row[1] is a valid number
+                const numRegistro = parseInt(row[1], 10);
+                scrapingEntity.numRegistro = isNaN(numRegistro) ? null : numRegistro; // Assign the corresponding value or null if not a valid number
+                console.log(`Saving: ${scrapingEntity.razonSocial}, ${scrapingEntity.numRegistro}`);
+                try {
+                  await this.scrapingRepository.save(scrapingEntity);
+                  console.log(`Saved: ${scrapingEntity.razonSocial}, ${scrapingEntity.numRegistro}`);
+                } catch (error) {
+                  console.error(`Error saving entity: ${error.message}`);
+                }
               }
             }
+            await page.evaluate(() => (document.querySelector('#rsoc') as HTMLInputElement).value = '');
           }
-          await page.evaluate(
-            () =>
-              ((document.querySelector('#rsoc') as HTMLInputElement).value =
-                ''),
-          );
         }
       }
     }
