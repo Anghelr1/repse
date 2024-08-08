@@ -3,6 +3,7 @@ import * as puppeteer from 'puppeteer';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ScrapingEntity } from './scraping.entity';
 import { Repository } from 'typeorm';
+const ac = require('@antiadmin/anticaptchaofficial');
 
 @Injectable()
 export class ScrapingService {
@@ -11,12 +12,77 @@ export class ScrapingService {
     private scrapingRepository: Repository<ScrapingEntity>,
   ) {}
 
+  private async handleCaptcha(page: puppeteer.Page) {
+    await page.evaluate(() => {
+      const recaptcha = document.querySelector('.grecaptcha-badge') as HTMLElement;
+      if (recaptcha) {
+        recaptcha.style.display = 'none';
+      }
+      const tokenInput = document.querySelector('#g-recaptcha-response') as HTMLInputElement;
+      if (tokenInput) {
+        tokenInput.value = 'dummy-token';
+      }
+    });
+  }
+
+  private async extractAndSaveData(page: puppeteer.Page) {
+    let hasNextPage = true;
+    while (hasNextPage) {
+      await page.waitForSelector('#tablaem tr');
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      const rows = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('#tablaem tr')).map(row => {
+          return Array.from(row.querySelectorAll('th, td')).map(cell => cell.textContent?.trim() || '');
+        });
+      });
+
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.length > 1) {
+          const scrapingEntity = new ScrapingEntity();
+          scrapingEntity.razonSocial = row[0];
+          const numRegistro = parseInt(row[1], 10);
+          scrapingEntity.numRegistro = isNaN(numRegistro) ? null : numRegistro;
+          try {
+            await this.scrapingRepository.save(scrapingEntity);
+            console.log(`Saved: ${scrapingEntity.razonSocial}, ${scrapingEntity.numRegistro}`);
+          } catch (error) {
+            console.error(`Error saving entity: ${error.message}`);
+          }
+        }
+      }
+
+      hasNextPage = await page.evaluate(() => {
+        const nextPageButton = document.querySelector('.pagination .page-item .page-link[data-page]:not([data-page=""])');
+        return !!nextPageButton;
+      });
+
+      if (hasNextPage) {
+        console.log('Next page');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        try {
+          await Promise.all([
+            page.click('.pagination .page-item .page-link[data-page]:not([data-page=""])'),
+          ]);
+          console.log('Navigated to next page');
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          await page.waitForSelector('#tablaem tr');
+          await this.handleCaptcha(page); // Handle captcha after navigating to the next page
+        } catch (error) {
+          console.error(`Error navigating to next page: ${error.message}`);
+          hasNextPage = false;
+        }
+      } else {
+        console.log('No more pages');
+      }
+    }
+  }
+
   async scrapeData(url: string): Promise<any> {
-    const browser = await puppeteer.launch({ headless: false }); // Set headless to false for debugging
+    const browser = await puppeteer.launch({ headless: false });
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: 'networkidle2' });
 
-    // Click on specific buttons
     await page.click('#arrowdiv-consulta');
     await page.waitForSelector('.btn-primary-right');
     await page.evaluate(() => {
@@ -33,7 +99,6 @@ export class ScrapingService {
       return;
     }
 
-    // Wait for the page to redirect
     await page.waitForSelector('#rsoc');
     console.log('Página redireccionada');
 
@@ -48,26 +113,15 @@ export class ScrapingService {
 
           while (retry) {
             await page.type('#rsoc', searchString);
-            await new Promise(resolve => setTimeout(resolve, 4000));
+            await new Promise(resolve => setTimeout(resolve, 3000));
 
-            // Disable reCAPTCHA
-            await page.evaluate(() => {
-              const recaptcha = document.querySelector('.grecaptcha-badge') as HTMLElement;
-              if (recaptcha) {
-                recaptcha.style.display = 'none';
-              }
-              const tokenInput = document.querySelector('#g-recaptcha-response') as HTMLInputElement;
-              if (tokenInput) {
-                tokenInput.value = 'dummy-token';
-              }
-            });
+            await this.handleCaptcha(page); // Handle captcha before search
 
             await page.click('#bnt_busqueda');
             await page.waitForSelector('#tablaem');
             await new Promise(resolve => setTimeout(resolve, 2000));
             console.log(`Searching for: ${searchString}`);
 
-            // Check for reCAPTCHA validation error
             const captchaError = await page.evaluate(() => {
               const errorElement = document.querySelector('#tablaem tbody h4');
               return errorElement ? errorElement.textContent.includes('Validación de capcha incorrecta.') : false;
@@ -77,37 +131,12 @@ export class ScrapingService {
               console.log('Captcha validation failed, refreshing page...');
               await page.reload({ waitUntil: 'networkidle2' });
               await page.waitForSelector('#rsoc');
-              continue; // Retry the same search string
+              continue;
             }
 
-            retry = false; // Exit the retry loop if no captcha error
+            retry = false;
 
-            await page.waitForSelector('#tablaem tr');
-            // Extract data from the table
-            const rows = await page.evaluate(() => {
-              return Array.from(document.querySelectorAll('#tablaem tr')).map(row => {
-                return Array.from(row.querySelectorAll('th, td')).map(cell => cell.textContent?.trim() || '');
-              });
-            });
-
-            // Skip the header row and save data to the database
-            for (let i = 1; i < rows.length; i++) {
-              const row = rows[i];
-              if (row.length > 1) {
-                const scrapingEntity = new ScrapingEntity();
-                scrapingEntity.razonSocial = row[0]; // Assign the corresponding value
-                // Ensure row[1] is a valid number
-                const numRegistro = parseInt(row[1], 10);
-                scrapingEntity.numRegistro = isNaN(numRegistro) ? null : numRegistro; // Assign the corresponding value or null if not a valid number
-                console.log(`Saving: ${scrapingEntity.razonSocial}, ${scrapingEntity.numRegistro}`);
-                try {
-                  await this.scrapingRepository.save(scrapingEntity);
-                  console.log(`Saved: ${scrapingEntity.razonSocial}, ${scrapingEntity.numRegistro}`);
-                } catch (error) {
-                  console.error(`Error saving entity: ${error.message}`);
-                }
-              }
-            }
+            await this.extractAndSaveData(page);
             await page.evaluate(() => (document.querySelector('#rsoc') as HTMLInputElement).value = '');
           }
         }
