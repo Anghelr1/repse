@@ -26,56 +26,86 @@ export class ScrapingService {
   }
 
   private async extractAndSaveData(page: puppeteer.Page) {
-    let hasNextPage = true;
-    while (hasNextPage) {
-      await page.waitForSelector('#tablaem tr');
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      const rows = await page.evaluate(() => {
-        return Array.from(document.querySelectorAll('#tablaem tr')).map(row => {
-          return Array.from(row.querySelectorAll('th, td')).map(cell => cell.textContent?.trim() || '');
-        });
-      });
+    const maxPageNumber = await page.evaluate(() => {
+      const pageLinks = Array.from(document.querySelectorAll('.pagination .page-link[data-page]'));
+      const pageNumbers = pageLinks.map(link => parseInt(link.getAttribute('data-page') || '0', 10));
+      return Math.max(...pageNumbers);
+    });
 
-      for (let i = 1; i < rows.length; i++) {
-        const row = rows[i];
-        if (row.length > 1) {
-          const scrapingEntity = new ScrapingEntity();
-          scrapingEntity.razonSocial = row[0];
-          const numRegistro = parseInt(row[1], 10);
-          scrapingEntity.numRegistro = isNaN(numRegistro) ? null : numRegistro;
+    console.log(`Max page number: ${maxPageNumber}`);
+
+    let currentPage = 1;
+    if (maxPageNumber <= 1) {
+      await this.processPage(page);
+      return;
+    }
+
+    while (currentPage <= maxPageNumber) {
+      try {
+        await this.processPage(page);
+        if (currentPage < maxPageNumber) {
+          console.log('Next page');
+          await new Promise(resolve => setTimeout(resolve, 3000));
           try {
-            await this.scrapingRepository.save(scrapingEntity);
-            console.log(`Saved: ${scrapingEntity.razonSocial}, ${scrapingEntity.numRegistro}`);
+            await Promise.all([
+              page.click(`.pagination .page-link[data-page="${currentPage + 1}"]`),
+            ]);
+            console.log('Navigated to next page');
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            await this.handleCaptcha(page);
+            await page.waitForSelector('#tablaem tr');
+            currentPage++;
           } catch (error) {
-            console.error(`Error saving entity: ${error.message}`);
+            console.error(`Error navigating to next page: ${error.message}`);
+            await this.reloadAndNavigateToPage(page, currentPage);
           }
+        } else {
+          console.log('No more pages');
+          break;
         }
-      }
-
-      hasNextPage = await page.evaluate(() => {
-        const nextPageButton = document.querySelector('.pagination .page-item .page-link[data-page]:not([data-page=""])');
-        return !!nextPageButton;
-      });
-
-      if (hasNextPage) {
-        console.log('Next page');
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        try {
-          await Promise.all([
-            page.click('.pagination .page-item .page-link[data-page]:not([data-page=""])'),
-          ]);
-          console.log('Navigated to next page');
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          await page.waitForSelector('#tablaem tr');
-          await this.handleCaptcha(page); // Handle captcha after navigating to the next page
-        } catch (error) {
-          console.error(`Error navigating to next page: ${error.message}`);
-          hasNextPage = false;
-        }
-      } else {
-        console.log('No more pages');
+      } catch (error) {
+        console.error(`Error processing page: ${error.message}`);
+        await this.reloadAndNavigateToPage(page, currentPage);
       }
     }
+  }
+
+  private async reloadAndNavigateToPage(page: puppeteer.Page, currentPage: number) {
+    await page.reload({ waitUntil: 'networkidle2' });
+    await page.waitForSelector('#rsoc');
+    for (let i = 1; i < currentPage; i++) {
+      await page.click(`.pagination .page-link[data-page="${i}"]`);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      await page.waitForSelector('#tablaem tr');
+      await this.handleCaptcha(page);
+    }
+  }
+
+  private async processPage(page: puppeteer.Page) {
+    await page.waitForSelector('#tablaem tr');
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    const rows = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('#tablaem tr')).map(row => {
+        return Array.from(row.querySelectorAll('th, td')).map(cell => cell.textContent?.trim() || '');
+      });
+    });
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.length > 1) {
+        const scrapingEntity = new ScrapingEntity();
+        scrapingEntity.razonSocial = row[0];
+        const numRegistro = parseInt(row[1], 10);
+        scrapingEntity.numRegistro = isNaN(numRegistro) ? null : numRegistro;
+        try {
+          await this.scrapingRepository.save(scrapingEntity);
+          console.log(`Saved: ${scrapingEntity.razonSocial}, ${scrapingEntity.numRegistro}`);
+        } catch (error) {
+          console.error(`Error saving entity: ${error.message}`);
+        }
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 4000));
   }
 
   async scrapeData(url: string): Promise<any> {
