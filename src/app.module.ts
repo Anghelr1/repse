@@ -3,23 +3,30 @@ import { ScrapingService } from "./scraping/scraping.service";
 import { ScrapingController } from "./scraping/scraping.controller";
 import { TypeOrmModule } from "@nestjs/typeorm";
 import { ScrapingEntity } from "./scraping/scraping.entity";
+import { ConfigModule } from '@nestjs/config';
 
 @Module({
   imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({
-      type: "mysql",
-      host: "localhost",
-      port: 3306,
-      username: "root",
-      password: "rA&Jc5Xf9d!h!YSK",
-      database: "scraping",
-      entities: [ScrapingEntity],
-      synchronize: true
+      type: 'mssql',
+      host: process.env.DB_HOSTNAME,
+      port: +process.env.DB_PORT,
+      database: process.env.DB_NAME,
+      username: process.env.DB_USERNAME,
+      password: process.env.DB_PASSWORD,
+      extra: {
+        options: {
+          encrypt: false,
+          trustServerCertificate: true,
+        },
+      },
+      autoLoadEntities: true,
+      synchronize: true,
     }),
     TypeOrmModule.forFeature([ScrapingEntity])
   ],
   controllers: [ScrapingController],
   providers: [ScrapingService]
 })
-export class AppModule {
-}
+export class AppModule {}

@@ -2,15 +2,24 @@ services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2019-latest
     container_name: sqlserver
+    restart: always
     environment:
-      SA_PASSWORD: "repsesystem"
+      SA_PASSWORD: "HolaMundo@"
       ACCEPT_EULA: "Y"
       MSSQL_DATABASE: repse
     ports:
       - "1433:1433"
     networks:
-        - backend
+      - backend
+
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - "8081:8080"
+    networks:
+      - backend
 
 networks:
-    backend:
-        driver: bridge
+  backend:
+    driver: bridge

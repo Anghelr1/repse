@@ -1,8 +1,11 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, Version } from '@nestjs/common';
 import { ScrapingService } from './scraping.service';
 import { ScrapingEntity } from './scraping.entity';
+@Controller({
+  path: 'repse',
+  version: '1',
+})
 
-@Controller('scraping')
 export class ScrapingController {
   constructor(private readonly scrapingService: ScrapingService) {}
 
